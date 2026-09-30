@@ -22,8 +22,7 @@ def validate_event(state: GraphState) -> GraphState:
             "is_other_organization": True,
         }
 
-    store = state["store"]
-    processed = store.get_processed_event(event.idempotency_key)
+    processed = state["store"].get_processed_event(event.idempotency_key)
 
     if processed is not None:
         return {
@@ -69,14 +68,13 @@ def classify_call(state: GraphState) -> GraphState:
     )
 
     classification = classifier.classify(event.model_dump(mode="json"))
-    normalized = normalize_classification(
-        event,
-        classification.model_dump(mode="json"),
-    )
 
     return {
         **state,
-        "classification": normalized,
+        "classification": normalize_classification(
+            event,
+            classification.model_dump(mode="json"),
+        ),
     }
 
 
@@ -96,6 +94,8 @@ def apply_business_rules(state: GraphState) -> GraphState:
     label = DecisionLabel(classification["label"])
     store = state["store"]
 
+    previous_cut_calls = 0
+
     if label in {
         DecisionLabel.CORTADA,
         DecisionLabel.VISITA_SIN_CONFIRMAR,
@@ -107,43 +107,46 @@ def apply_business_rules(state: GraphState) -> GraphState:
             call_id,
             event.occurred_at.isoformat(),
         )
-    else:
-        previous_cut_calls = 0
 
     attempt_number = store.register_call_attempt(event.lead.contact_id)
 
     config = load_campaign_config()
-    retry_config = config["reintentos"]
-    max_attempts = int(retry_config["max_intentos"])
+    max_attempts = int(config["reintentos"]["max_intentos"])
 
     business_rules = {
         "attempt_number": attempt_number,
         "action": "none",
     }
 
-    if label in {
+    retryable_labels = {
         DecisionLabel.OCUPADO,
         DecisionLabel.SIN_RESPUESTA,
         DecisionLabel.BUZON,
-    }:
-        action = "retry" if attempt_number < max_attempts else "fallback"
-        business_rules["action"] = action
+        DecisionLabel.CORTADA,
+        DecisionLabel.VISITA_SIN_CONFIRMAR,
+    }
+
+    if label in retryable_labels:
+        business_rules["action"] = (
+            "retry" if attempt_number < max_attempts else "fallback"
+        )
 
     if label in {
         DecisionLabel.CORTADA,
         DecisionLabel.VISITA_SIN_CONFIRMAR,
     }:
-        business_rules["action"] = "retry"
         business_rules["second_cut"] = previous_cut_calls >= 1
 
-    if label == DecisionLabel.RECHAZADA:
-        business_rules["action"] = "fallback"
-
-    if label == DecisionLabel.OTRO:
-        business_rules["action"] = "review"
-
-    if label == DecisionLabel.NO_CONTACTAR:
-        business_rules["action"] = "dnc"
+    if label in {
+        DecisionLabel.RECHAZADA,
+        DecisionLabel.NO_CONTACTAR,
+        DecisionLabel.OTRO,
+    }:
+        business_rules["action"] = {
+            DecisionLabel.RECHAZADA: "fallback",
+            DecisionLabel.NO_CONTACTAR: "dnc",
+            DecisionLabel.OTRO: "review",
+        }[label]
 
     return {
         **state,
@@ -169,11 +172,10 @@ def plan_orders(state: GraphState) -> GraphState:
     if state.get("is_duplicate"):
         label_value = state.get("processed_label") or DecisionLabel.NO_APLICA.value
         label = DecisionLabel(label_value)
-        reason = "Reentrega del mismo evento; se reutiliza la decisión original sin emitir nuevas órdenes."
         return _set_decision(
             state,
             label,
-            reason,
+            "Reentrega del mismo evento; se reutiliza la decisión original sin emitir nuevas órdenes.",
             1.0,
             [],
         )
@@ -183,7 +185,7 @@ def plan_orders(state: GraphState) -> GraphState:
         return _set_decision(
             state,
             DecisionLabel.NO_APLICA,
-            "Mensaje recibido del lead; se gestionan los recordatorios pendientes.",
+            "Mensaje recibido del lead; se cancelan los recordatorios pendientes.",
             1.0,
             orders,
         )
@@ -209,25 +211,19 @@ def _set_decision(
     orders,
 ) -> GraphState:
     event = state["event"]
-    call_id = (
-        event.telephony.call_id
-        if event.telephony is not None
-        else None
-    )
-
-    decision = Decision(
-        event_id=event.event_id,
-        call_id=call_id,
-        label=label,
-        reason=reason,
-        confidence=max(0.0, min(1.0, confidence)),
-        order_ids=[order.order_id for order in orders],
-    )
+    call_id = event.telephony.call_id if event.telephony else None
 
     return {
         **state,
         "orders": orders,
-        "decision": decision,
+        "decision": Decision(
+            event_id=event.event_id,
+            call_id=call_id,
+            label=label,
+            reason=reason,
+            confidence=max(0.0, min(1.0, confidence)),
+            order_ids=[order.order_id for order in orders],
+        ),
     }
 
 
