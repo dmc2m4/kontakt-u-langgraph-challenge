@@ -316,3 +316,21 @@ class StateStore:
 
     def close(self) -> None:
         self.connection.close()
+
+    def register_call_attempt(self, contact_id: str) -> int:
+        current_attempts = self.get_call_attempts(contact_id)
+        next_attempt = current_attempts + 1
+
+        self.connection.execute(
+            """
+            INSERT INTO call_attempts (contact_id, attempts)
+            VALUES (?, ?)
+            ON CONFLICT(contact_id)
+            DO UPDATE SET attempts = excluded.attempts
+            """,
+            (contact_id, next_attempt),
+        )
+
+        self.connection.commit()
+
+        return next_attempt
