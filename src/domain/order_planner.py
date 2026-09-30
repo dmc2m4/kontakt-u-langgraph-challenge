@@ -49,7 +49,10 @@ def plan_event_orders(event: Event, label: DecisionLabel | None, state) -> list[
     elif label == DecisionLabel.CALLBACK:
         orders.extend(_callback_orders(event, state))
     elif label == DecisionLabel.SIN_RESPUESTA:
-        orders.append(_retry_call_order(event, "sin respuesta", state))
+        if state["business_rules"]["action"] == "retry":
+            orders.append(_retry_call_order(event, "sin respuesta", state))
+        else:
+            orders.append(_fallback_whatsapp_order(event, state))
     elif label == DecisionLabel.OCUPADO:
         orders.append(_retry_or_fallback_order(event, label, state))
     elif label == DecisionLabel.BUZON:
