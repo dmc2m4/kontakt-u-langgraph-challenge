@@ -9,6 +9,19 @@ def deterministic_classification(
     if event.telephony is None:
         return None
 
+    transcript = " ".join(
+        message.message.lower()
+        for message in event.transcript
+        if message.role == "user"
+    )
+
+    if _explicit_no_contact_request(transcript):
+        return _classification(
+            DecisionLabel.NO_CONTACTAR,
+            "El lead pidió explícitamente no volver a ser contactado.",
+            0.99,
+        )
+
     if event.agent_outcome and event.agent_outcome.appointment:
         return _classification(
             DecisionLabel.VISITA_RESERVADA,
@@ -108,3 +121,23 @@ def _classification(
         "callback_requested_at": None,
         "context_note": None,
     }
+
+
+
+def _explicit_no_contact_request(transcript: str) -> bool:
+    phrases = (
+        "no me llaméis más",
+        "no me llamen más",
+        "no me llames más",
+        "no quiero que me llaméis",
+        "no quiero que me llamen",
+        "no quiero que me contactéis",
+        "no quiero que me contacten",
+        "no quiero que me contactes",
+        "no me contactéis más",
+        "no me contacten más",
+        "no me contactes más",
+        "darme de baja",
+        "dadme de baja",
+    )
+    return any(phrase in transcript for phrase in phrases)
