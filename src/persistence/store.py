@@ -58,7 +58,6 @@ class StateStore:
             );
             """
         )
-
         self.connection.commit()
 
     def get_processed_event(self, idempotency_key: str) -> sqlite3.Row | None:
@@ -70,8 +69,11 @@ class StateStore:
             """,
             (idempotency_key,),
         )
-
         return cursor.fetchone()
+
+    def get_processed_label(self, idempotency_key: str) -> str | None:
+        row = self.get_processed_event(idempotency_key)
+        return None if row is None else row["label"]
 
     def save_processed_event(
         self,
@@ -79,10 +81,10 @@ class StateStore:
         event_id: str,
         processed_at: str,
         label: str | None = None,
-    ) -> None:
-        self.connection.execute(
+    ) -> bool:
+        cursor = self.connection.execute(
             """
-            INSERT INTO processed_events (
+            INSERT OR IGNORE INTO processed_events (
                 idempotency_key,
                 event_id,
                 label,
@@ -92,8 +94,8 @@ class StateStore:
             """,
             (idempotency_key, event_id, label, processed_at),
         )
-
         self.connection.commit()
+        return cursor.rowcount == 1
 
     def get_call_attempts(self, contact_id: str) -> int:
         cursor = self.connection.execute(
@@ -104,17 +106,12 @@ class StateStore:
             """,
             (contact_id,),
         )
-
         row = cursor.fetchone()
+        return 0 if row is None else int(row["attempts"])
 
-        if row is None:
-            return 0
-
-        return row["attempts"]
-
-    def increment_call_attempts(self, contact_id: str) -> int:
+    def register_call_attempt(self, contact_id: str) -> int:
         current_attempts = self.get_call_attempts(contact_id)
-        new_attempts = current_attempts + 1
+        next_attempt = current_attempts + 1
 
         self.connection.execute(
             """
@@ -123,12 +120,13 @@ class StateStore:
             ON CONFLICT(contact_id)
             DO UPDATE SET attempts = excluded.attempts
             """,
-            (contact_id, new_attempts),
+            (contact_id, next_attempt),
         )
-
         self.connection.commit()
+        return next_attempt
 
-        return new_attempts
+    def increment_call_attempts(self, contact_id: str) -> int:
+        return self.register_call_attempt(contact_id)
 
     def save_reminder(
         self,
@@ -139,7 +137,7 @@ class StateStore:
     ) -> None:
         self.connection.execute(
             """
-            INSERT INTO reminders (
+            INSERT OR IGNORE INTO reminders (
                 reminder_id,
                 contact_id,
                 channel,
@@ -148,14 +146,8 @@ class StateStore:
             )
             VALUES (?, ?, ?, 'scheduled', ?)
             """,
-            (
-                reminder_id,
-                contact_id,
-                channel,
-                created_at,
-            ),
+            (reminder_id, contact_id, channel, created_at),
         )
-
         self.connection.commit()
 
     def get_pending_reminders(self, contact_id: str) -> list[sqlite3.Row]:
@@ -169,7 +161,6 @@ class StateStore:
             """,
             (contact_id,),
         )
-
         return cursor.fetchall()
 
     def cancel_reminder(self, reminder_id: str) -> None:
@@ -182,7 +173,6 @@ class StateStore:
             """,
             (reminder_id,),
         )
-
         self.connection.commit()
 
     def save_dnc(
@@ -207,14 +197,8 @@ class StateStore:
                 channel = excluded.channel,
                 created_at = excluded.created_at
             """,
-            (
-                contact_id,
-                phone,
-                channel,
-                created_at,
-            ),
+            (contact_id, phone, channel, created_at),
         )
-
         self.connection.commit()
 
     def is_dnc(self, contact_id: str) -> bool:
@@ -226,7 +210,6 @@ class StateStore:
             """,
             (contact_id,),
         )
-
         return cursor.fetchone() is not None
 
     def save_cut_call(
@@ -244,13 +227,8 @@ class StateStore:
             )
             VALUES (?, ?, ?)
             """,
-            (
-                contact_id,
-                call_id,
-                created_at,
-            ),
+            (contact_id, call_id, created_at),
         )
-
         self.connection.commit()
 
     def count_cut_calls(self, contact_id: str) -> int:
@@ -262,10 +240,7 @@ class StateStore:
             """,
             (contact_id,),
         )
-
-        row = cursor.fetchone()
-
-        return row["count"]
+        return int(cursor.fetchone()["count"])
 
     def save_order(
         self,
@@ -297,9 +272,7 @@ class StateStore:
                 created_at,
             ),
         )
-
         self.connection.commit()
-
         return cursor.rowcount == 1
 
     def get_order(self, idempotency_key: str) -> sqlite3.Row | None:
@@ -311,26 +284,7 @@ class StateStore:
             """,
             (idempotency_key,),
         )
-
         return cursor.fetchone()
 
     def close(self) -> None:
         self.connection.close()
-
-    def register_call_attempt(self, contact_id: str) -> int:
-        current_attempts = self.get_call_attempts(contact_id)
-        next_attempt = current_attempts + 1
-
-        self.connection.execute(
-            """
-            INSERT INTO call_attempts (contact_id, attempts)
-            VALUES (?, ?)
-            ON CONFLICT(contact_id)
-            DO UPDATE SET attempts = excluded.attempts
-            """,
-            (contact_id, next_attempt),
-        )
-
-        self.connection.commit()
-
-        return next_attempt
