@@ -3,44 +3,80 @@ from typing import Any
 from .models import AMDResult, DecisionLabel, Event
 
 
+def deterministic_classification(
+    event: Event,
+) -> dict[str, Any] | None:
+    if event.telephony is None:
+        return None
+
+    if event.agent_outcome and event.agent_outcome.appointment:
+        return _classification(
+            DecisionLabel.VISITA_RESERVADA,
+            "La llamada terminó con una cita creada en el CRM.",
+            1.0,
+        )
+
+    sip_status_code = event.telephony.sip_status_code
+    amd = event.telephony.amd
+
+    if sip_status_code == 486:
+        return _classification(
+            DecisionLabel.OCUPADO,
+            "486 Busy Here: la línea comunica.",
+            0.99,
+        )
+
+    if sip_status_code == 603:
+        return _classification(
+            DecisionLabel.RECHAZADA,
+            "603 Decline: la llamada fue rechazada activamente antes de descolgar.",
+            0.99,
+        )
+
+    if sip_status_code in {408, 480} and not event.transcript:
+        return _classification(
+            DecisionLabel.SIN_RESPUESTA,
+            f"{sip_status_code}: no hubo respuesta ni conversación.",
+            0.99,
+        )
+
+    if amd:
+        if amd.result in {
+            AMDResult.MACHINE_VM,
+            AMDResult.MACHINE_UNAVAILABLE,
+        }:
+            return _classification(
+                DecisionLabel.BUZON,
+                "La detección AMD indica buzón o máquina no disponible.",
+                0.99,
+            )
+
+        if amd.result == AMDResult.MACHINE_IVR:
+            return _classification(
+                DecisionLabel.OTRO,
+                "La detección AMD indica una máquina IVR, que no encaja en los casos soportados.",
+                0.99,
+            )
+
+    if 500 <= sip_status_code <= 599:
+        return _classification(
+            DecisionLabel.OTRO,
+            f"SIP {sip_status_code}: fallo de trunk sin un caso soportado.",
+            0.99,
+        )
+
+    return None
+
+
 def normalize_classification(
     event: Event,
     classification: dict[str, Any],
 ) -> dict[str, Any]:
     result = dict(classification)
+    deterministic = deterministic_classification(event)
 
-    if event.type.value != "call.ended":
-        return result
-
-    telephony = event.telephony
-
-    if telephony is None:
-        return result
-
-    sip_status_code = telephony.sip_status_code
-    amd = telephony.amd
-
-    if sip_status_code == 486:
-        return _with_label(result, DecisionLabel.OCUPADO)
-
-    if sip_status_code == 603:
-        return _with_label(result, DecisionLabel.RECHAZADA)
-
-    if sip_status_code in {408, 480} and not event.transcript:
-        return _with_label(result, DecisionLabel.SIN_RESPUESTA)
-
-    if amd is not None:
-        if amd.result in {
-            AMDResult.MACHINE_VM,
-            AMDResult.MACHINE_UNAVAILABLE,
-        }:
-            return _with_label(result, DecisionLabel.BUZON)
-
-        if amd.result == AMDResult.MACHINE_IVR:
-            return _with_label(result, DecisionLabel.OTRO)
-
-    if 500 <= sip_status_code <= 599:
-        return _with_label(result, DecisionLabel.OTRO)
+    if deterministic is not None:
+        result.update(deterministic)
 
     return result
 
@@ -55,19 +91,20 @@ def determine_retry(
         DecisionLabel.SIN_RESPUESTA,
         DecisionLabel.BUZON,
     }:
-        if attempt_number < max_attempts:
-            return "retry"
-
-        return "fallback"
+        return "retry" if attempt_number < max_attempts else "fallback"
 
     return "none"
 
 
-def _with_label(
-    classification: dict[str, Any],
+def _classification(
     label: DecisionLabel,
+    reason: str,
+    confidence: float,
 ) -> dict[str, Any]:
-    result = dict(classification)
-    result["label"] = label.value
-
-    return result
+    return {
+        "label": label.value,
+        "reason": reason,
+        "confidence": confidence,
+        "callback_requested_at": None,
+        "context_note": None,
+    }
