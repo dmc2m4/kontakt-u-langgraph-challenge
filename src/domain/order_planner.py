@@ -55,11 +55,17 @@ def plan_event_orders(event: Event, label: DecisionLabel | None, state) -> list[
     elif label == DecisionLabel.BUZON:
         orders.append(_retry_or_fallback_order(event, label, state))
     elif label == DecisionLabel.CORTADA:
-        orders.append(_cut_retry_order(event, state))
+        if state["business_rules"]["action"] == "retry":
+            orders.append(_cut_retry_order(event, state))
+        else:
+            orders.append(_fallback_whatsapp_order(event, state))
         if state["business_rules"].get("second_cut"):
             orders.append(_review_task_order(event, "segunda llamada cortada"))
     elif label == DecisionLabel.VISITA_SIN_CONFIRMAR:
-        orders.append(_cut_retry_order(event, state))
+        if state["business_rules"]["action"] == "retry":
+            orders.append(_cut_retry_order(event, state))
+        else:
+            orders.append(_fallback_whatsapp_order(event, state))
         if state["business_rules"].get("second_cut"):
             orders.append(_review_task_order(event, "segunda llamada con visita acordada pero no reservada"))
     elif label == DecisionLabel.PERSONA_EQUIVOCADA:
