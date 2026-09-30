@@ -23,7 +23,6 @@ def get_timezone() -> ZoneInfo:
 def is_call_window_open(moment: datetime) -> bool:
     config = load_campaign_config()
     schedule = config["ventana_llamadas"]
-
     local_moment = moment.astimezone(get_timezone())
     window = schedule.get(DAY_NAMES[local_moment.weekday()], [])
 
@@ -32,9 +31,8 @@ def is_call_window_open(moment: datetime) -> bool:
 
     start = _parse_time(window[0])
     end = _parse_time(window[1])
-    current_time = local_moment.time()
 
-    return start <= current_time <= end
+    return start <= local_moment.time() <= end
 
 
 def next_call_window(moment: datetime) -> datetime:
@@ -88,8 +86,22 @@ def schedule_busy_retry(reference: datetime) -> datetime:
 
 def schedule_cut_retry(reference: datetime) -> datetime:
     config = load_campaign_config()
-    minutes = int(config["reintentos"]["cortada_minutos_min"])
-    return schedule_within_call_window(reference, timedelta(minutes=minutes))
+    retry_config = config["reintentos"]
+    minimum = timedelta(minutes=int(retry_config["cortada_minutos_min"]))
+    maximum = timedelta(hours=int(retry_config["cortada_horas_max"]))
+
+    earliest = reference.astimezone(get_timezone()) + minimum
+    deadline = reference.astimezone(get_timezone()) + maximum
+
+    if is_call_window_open(earliest):
+        return earliest
+
+    candidate = next_call_window(earliest)
+
+    if candidate > deadline:
+        raise ValueError("No valid call window exists within the cut-call deadline.")
+
+    return candidate
 
 
 def is_business_day(moment: datetime) -> bool:
@@ -108,6 +120,7 @@ def add_business_days(reference: datetime, days: int) -> datetime:
     current = reference.astimezone(timezone)
 
     remaining = days
+
     while remaining:
         current += timedelta(days=1)
         if DAY_NAMES[current.weekday()] in config["dias_habiles"]:
