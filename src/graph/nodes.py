@@ -33,7 +33,10 @@ def validate_event(state: GraphState) -> GraphState:
             "processed_label": processed["label"],
         }
 
-    is_dnc = state["store"].is_dnc(event.lead.contact_id)
+    is_dnc = (
+        event.type == EventType.CALL_ENDED
+        and state["store"].is_dnc(event.lead.contact_id)
+    )
 
     return {
         **state,
