@@ -33,11 +33,14 @@ def validate_event(state: GraphState) -> GraphState:
             "processed_label": processed["label"],
         }
 
+    is_dnc = state["store"].is_dnc(event.lead.contact_id)
+
     return {
         **state,
         "is_valid": True,
         "is_duplicate": False,
         "is_other_organization": False,
+        "is_dnc": is_dnc,
     }
 
 
@@ -45,7 +48,11 @@ def classify_call(state: GraphState) -> GraphState:
     if not state.get("is_valid"):
         return state
 
-    if state.get("is_duplicate") or state.get("is_other_organization"):
+    if (
+        state.get("is_duplicate")
+        or state.get("is_other_organization")
+        or state.get("is_dnc")
+    ):
         return state
 
     event = state["event"]
@@ -82,7 +89,11 @@ def apply_business_rules(state: GraphState) -> GraphState:
     if not state.get("is_valid"):
         return state
 
-    if state.get("is_duplicate") or state.get("is_other_organization"):
+    if (
+        state.get("is_duplicate")
+        or state.get("is_other_organization")
+        or state.get("is_dnc")
+    ):
         return state
 
     event = state["event"]
@@ -176,6 +187,15 @@ def plan_orders(state: GraphState) -> GraphState:
             state,
             label,
             "Reentrega del mismo evento; se reutiliza la decisión original sin emitir nuevas órdenes.",
+            1.0,
+            [],
+        )
+
+    if state.get("is_dnc"):
+        return _set_decision(
+            state,
+            DecisionLabel.NO_APLICA,
+            "El lead está marcado como no contactar y no se emiten nuevas órdenes.",
             1.0,
             [],
         )
