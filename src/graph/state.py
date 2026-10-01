@@ -14,6 +14,7 @@ class GraphState(TypedDict, total=False):
     is_valid: bool
     is_duplicate: bool
     is_other_organization: bool
+    is_dnc: bool
     processed_label: str | None
     classification: dict[str, Any]
     business_rules: dict[str, Any]
